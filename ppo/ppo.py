@@ -12,6 +12,7 @@ import yaml
 from argparse import Namespace
 # from collections import deque
 import random
+import pandas as pd
 
 # Set device (prefer GPU if available)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -26,13 +27,14 @@ class ActorNet(nn.Module):
         self.fc3 = nn.Linear(hidden_dim, hidden_dim)
         print(f"ActorNet: obs_dim={obs_dim}, act_dim={act_dim}, hidden_dim={hidden_dim}")
 
+
         self.mu_head = nn.Linear(hidden_dim, act_dim)
         self.log_std = nn.Parameter(torch.tensor([-2.5, 0.22], dtype=torch.float32))
 
         # Action bounds (steering, velocity)
         self.action_bounds = {
             'low': torch.tensor([-0.4, 0.0], device=device),
-            'high': torch.tensor([0.4, 7.0], device=device)
+            'high': torch.tensor([0.4, 5.0], device=device)
         }
 
     def forward(self, x):
@@ -273,10 +275,10 @@ def compute_reward(obs, prev_obs, action, step_reward, done, processor):
     # === Speed Reward ===
     speed = np.hypot(v_x, v_y)
     speed_reward = 1.0 * speed
+    if speed > 2.0:
+        speed_reward += 1.0 * (speed - 2.0)
     if speed > 4.0:
         speed_reward += 1.0 * (speed - 4.0)
-    if speed > 6.0:
-        speed_reward += 1.0 * (speed - 6.0)
 
     # === Alignment Reward ===
     alignment_reward = 0.0
@@ -303,7 +305,7 @@ def compute_reward(obs, prev_obs, action, step_reward, done, processor):
     # === Stability Penalties ===
     steering_penalty = 0.5 * abs(steering)
     spin_penalty = 0.5 * abs(ang_vel_z)
-    step_penalty = 0.1
+    step_penalty = 0.25
 
     # === Lap Completion Rewards ===
     lap_reward = 0.0
@@ -615,22 +617,27 @@ def train_ppo(env_config='Austin_map.yaml', num_episodes=10000, save_interval=25
     plt.xlabel("Episode"); plt.ylabel("Steps"); plt.title("Episode Length"); plt.grid()
 
     plt.subplot(3, 2, 3)
-    plt.plot([np.mean(reward_records[max(0, i-10):i+1]) for i in range(len(reward_records))])
-    plt.xlabel("Episode"); plt.ylabel("Smoothed Reward"); plt.title("Smoothed Reward (10)"); plt.grid()
+    plt.plot([np.mean(reward_records[max(0, i-100):i+1]) for i in range(len(reward_records))])
+    plt.xlabel("Episode"); plt.ylabel("Smoothed Reward"); plt.title("Smoothed Reward (100)"); plt.grid()
 
     plt.subplot(3, 2, 4)
     plt.plot(lap_records)
     plt.xlabel("Episode"); plt.ylabel("Laps Completed"); plt.title("Lap Count"); plt.grid()
 
-    plt.subplot(3, 2, 5)
-    plt.plot(range(len(reward_records)-min(50, len(reward_records)), len(reward_records)), reward_records[-min(50, len(reward_records)):])
-    plt.xlabel("Episode"); plt.ylabel("Reward"); plt.title("Last Episodes Reward"); plt.grid()
+    # plt.subplot(3, 2, 5)
+    # plt.plot(range(len(reward_records)-min(50, len(reward_records)), len(reward_records)), reward_records[-min(50, len(reward_records)):])
+    # plt.xlabel("Episode"); plt.ylabel("Reward"); plt.title("Last Episodes Reward"); plt.grid()
 
-    if max(lap_records) > 0:
-        lap_diff = [lap_records[i] - lap_records[i-1] if i > 0 else lap_records[i] for i in range(len(lap_records))]
-        plt.subplot(3, 2, 6)
-        plt.plot([np.mean(lap_diff[max(0, i-10):i+1]) for i in range(len(lap_diff))])
-        plt.xlabel("Episode"); plt.ylabel("Lap Completion Rate"); plt.title("Smoothed Lap Completion Rate"); plt.grid()
+    # if max(lap_records) > 0:
+    #     lap_diff = [lap_records[i] - lap_records[i-1] if i > 0 else lap_records[i] for i in range(len(lap_records))]
+    #     plt.subplot(3, 2, 6)
+    #     plt.plot([np.mean(lap_diff[max(0, i-50):i+1]) for i in range(len(lap_diff))])
+    #     plt.xlabel("Episode"); plt.ylabel("Lap Completion Rate"); plt.title("Smoothed Lap Completion Rate"); plt.grid()
+
+    pd.DataFrame(reward_records, columns=['reward']).to_csv('reward_records.csv', index=False)
+    pd.DataFrame(episode_length_records, columns=['episode_length']).to_csv('episode_lengths.csv', index=False)
+    pd.DataFrame(lap_records, columns=['laps']).to_csv('lap_records.csv', index=False)
+
 
     plt.tight_layout()
     plt.savefig("training_curves.png")
@@ -789,7 +796,7 @@ if __name__ == "__main__":
         act_dim = 2
         
         # Load model
-        model_path = "best_laptime_model.pt"  # Change to desired model
+        model_path = "best_laptime_model_v5.pt"  # Change to desired model
         actor, critic, processor = load_model(model_path, obs_dim, act_dim)
     
     # Create environment for rendering
